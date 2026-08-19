@@ -1,0 +1,516 @@
+
+
+
+
+
+# 1. Install uv (if you haven't already)
+curl -LsSf https://astral.sh/uv/install.sh | sh
+source $HOME/.local/bin/env
+# old way wasn't working
+# source $HOME/.cargo/env
+
+# 2. Update OS toolchains
+sudo apt update && sudo apt install -y software-properties-common build-essential wget git tmux
+
+# 3. Patch Ubuntu 22.04 with legacy libtinfo5 (Mandatory for Gym 0.21)
+wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2_amd64.deb
+wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2_amd64.deb
+sudo dpkg -i libtinfo5_6.3-2_amd64.deb libncurses5_6.3-2_amd64.deb
+rm *.deb
+
+# 4. Summon Python 3.10 & Create the airlock
+# uv downloads and manages Python 3.10 itself—no PPA required.
+uv python install 3.10
+uv venv ~/env2 --python 3.10
+source ~/env2/bin/activate
+
+
+uv pip install huggingface_hub==0.36.2
+# login with your hugging face access token
+hf auth login
+hf download bcoding/grpo_data_2 grpo_data_2.tgz --repo-type dataset --local-dir .  # download the grpo dataset
+
+
+# After importing the dataset for grpo, do this
+tar xzf grpo_data_2.tgz # gives you ir_cache/, compiler_dataset_train/, oz_baselines.json, grand_spellbook.json
+
+# 5. Install PyTorch ecosystem
+# uv pip is a drop-in replacement. We use it sequentially here to respect your specific index URLs.
+uv pip install torch==2.11.0 torchvision==0.26.0 torchaudio==2.11.0 \
+  --index-url https://download.pytorch.org/whl/cu130
+
+# 6. Lock Unsloth & ML Ecosystem
+# Note: You no longer need to downgrade pip to 23.3.1, because `uv` bypasses pip's resolver entirely.
+uv pip install "unsloth[colab-new]==2026.8.13"
+uv pip install unsloth-zoo==2026.8.10 --no-deps
+ 
+uv pip install --no-deps trl==0.24.0
+uv pip install accelerate==1.14.0 transformers==4.57.6 datasets==4.3.0 \
+  peft==0.20.0 vllm==0.22.0
+
+
+
+
+
+# 1. Inject legacy pip and legacy build tools directly into the uv environment
+uv pip install pip==23.3.1 setuptools==65.5.0 wheel==0.38.4
+
+# 2. Use the newly installed legacy pip to force Gym to build.
+# (Using 'python -m pip' guarantees it uses the venv's pip, not the OS pip)
+python -m pip install gym==0.21.0 --no-build-isolation
+
+# 3. Hand the reins back to uv for the rest of the compiler stack
+uv pip install compiler_gym llvmlite "numpy<2"
+
+
+
+
+
+
+# 1. Patch the typo in the correct environment (env3)
+sed -i 's/opencv-python (>=3.)/opencv-python (>=3.0)/g' env2/lib/python3.10/site-packages/gym-0.21.0.dist-info/METADATA
+
+# 2. Resume the installation
+uv pip install compiler_gym==0.2.5 llvmlite==0.47.0 "numpy==1.26.4"
+
+
+
+
+
+
+
+# llvm stuff needed for grpo
+
+
+# 1. Create a toolchain directory in your project folder
+mkdir -p ~/rlc-project/llvm-10-toolchain
+cd ~/rlc-project/llvm-10-toolchain
+
+# 2. Download the official LLVM 10 pre-built binaries for Linux
+wget https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+
+# 3. Extract the files directly into your toolchain directory
+tar -xvf clang+llvm-10.0.0-*.tar.xz --strip-components=1
+
+# 4. Clean up the downloaded archive
+rm clang+llvm-10.0.0-*.tar.xz
+
+# 5. Verify the installation
+./bin/opt --version
+./bin/clang --version
+
+cd ../..
+
+hf download bcoding/compiler-llvm-deepseek-8b-grpo-checkpoints --include "checkpoint-730/**" --local-dir ./compiler-llvm-deepseek-8b-grpo-checkpoints
+
+
+
+
+
+
+
+
+
+
+
+
+tmux new -s grpo_run
+# or tmux new -s sft_run
+
+
+
+source ~/env2/bin/activate
+echo "set -g mouse on" >> ~/.tmux.conf
+tmux source-file ~/.tmux.conf
+
+
+mkdir -p ~/logs
+tmux pipe-pane -o 'cat >> ~/logs/train_capture.log'
+
+
+
+
+
+
+
+
+
+
+uv --version
+python --version
+uv pip list
+uv pip check
+nvidia-smi
+nvcc --version
+
+
+
+uv pip show torch transformers trl unsloth vllm peft accelerate datasets compiler_gym gym llvmlite
+
+
+
+uv run python -c "import torch; print('torch:', torch.__version__); print('torch CUDA:', torch.version.cuda); print('CUDA available:', torch.cuda.is_available()); print('GPU:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'NONE')"
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#output
+uv --version
+python --version
+device_name(0) if torch.cuda.is_available() else 'NONE')"lable()); print('GPU:', torch.cuda.get_
+bash: ./bin/opt: No such file or directory
+bash: ./bin/clang: No such file or directory
+uv 0.12.3 (x86_64-unknown-linux-gnu)
+Python 3.10.20
+Using Python 3.10.20 environment at: env2
+Package                                  Version
+---------------------------------------- -------------------
+absl-py                                  2.5.0
+accelerate                               1.14.0
+aiohappyeyeballs                         2.7.1
+aiohttp                                  3.14.3
+aiosignal                                1.4.0
+annotated-doc                            0.0.5
+annotated-types                          0.8.0
+anthropic                                0.121.0
+anyio                                    4.14.2
+apache-tvm-ffi                           0.1.9
+astor                                    0.8.1
+async-timeout                            5.0.1
+attrs                                    26.1.0
+backports-strenum                        1.3.1
+bitsandbytes                             0.50.0
+blake3                                   1.0.9
+cachetools                               7.1.7
+cbor2                                    6.1.4
+certifi                                  2026.7.22
+cffi                                     2.1.1
+charset-normalizer                       3.4.9
+click                                    8.4.2
+cloudpickle                              3.1.2
+compiler-gym                             0.2.5
+compressed-tensors                       0.15.0.1
+cryptography                             50.0.0
+cuda-bindings                            13.3.1
+cuda-core                                1.0.1
+cuda-pathfinder                          1.6.0
+cuda-python                              13.3.1
+cuda-tile                                1.5.0
+cuda-toolkit                             13.0.2
+cut-cross-entropy                        25.1.1
+datasets                                 4.3.0
+deprecated                               1.3.1
+depyf                                    0.20.0
+detect-installer                         0.1.0
+dill                                     0.4.0
+diskcache                                5.6.3
+distro                                   1.9.0
+dnspython                                2.8.0
+docker                                   7.2.0
+docstring-parser                         0.18.0
+einops                                   0.8.2
+email-validator                          2.3.0
+exceptiongroup                           1.3.1
+fastapi                                  0.141.1
+fastapi-cli                              0.0.32
+fastapi-cloud-cli                        0.23.0
+fastar                                   0.11.0
+fasteners                                0.20
+fastsafetensors                          0.3.3
+filelock                                 3.32.2
+flashinfer-cubin                         0.6.11.post2
+flashinfer-python                        0.6.11.post2
+frozenlist                               1.8.0
+fsspec                                   2025.9.0
+gguf                                     0.19.0
+googleapis-common-protos                 1.75.1
+grpcio                                   1.43.0
+gym                                      0.21.0
+h11                                      0.16.0
+hf-transfer                              0.1.9
+hf-xet                                   1.6.0
+httpcore                                 1.0.9
+httpcore2                                2.10.0
+httptools                                0.8.0
+httpx                                    0.28.1
+httpx2                                   2.10.0
+huggingface-hub                          0.36.2
+humanize                                 4.16.0
+humming-kernels                          0.1.2
+idna                                     3.18
+ijson                                    3.5.1
+interegular                              0.3.3
+jinja2                                   3.1.6
+jiter                                    0.16.0
+jmespath                                 1.1.0
+joblib                                   1.5.3
+jsonschema                               4.26.0
+jsonschema-specifications                2025.9.1
+lark                                     1.2.2
+llguidance                               1.7.6
+llvmlite                                 0.47.0
+lm-format-enforcer                       0.11.3
+loguru                                   0.7.3
+loop-tool-py                             0.0.7
+markdown-it-py                           4.2.0
+markupsafe                               3.0.3
+mcp                                      2.0.0
+mcp-types                                2.0.0
+mdurl                                    0.1.2
+mistral-common                           1.11.7
+ml-dtypes                                0.5.4
+model-hosting-container-standards        0.1.16
+mpmath                                   1.3.0
+msgspec                                  0.21.1
+multidict                                6.7.1
+multiprocess                             0.70.16
+nest-asyncio                             1.6.0
+networkx                                 3.4.2
+ninja                                    1.13.0
+numba                                    0.65.0
+numpy                                    1.26.4
+nvidia-cublas                            13.1.0.3
+nvidia-cuda-cccl                         13.3.3.4.1
+nvidia-cuda-crt                          13.3.73
+nvidia-cuda-cupti                        13.0.85
+nvidia-cuda-nvcc                         13.3.73
+nvidia-cuda-nvrtc                        13.0.88
+nvidia-cuda-runtime                      13.0.96
+nvidia-cudnn-cu13                        9.19.0.56
+nvidia-cudnn-frontend                    1.18.0
+nvidia-cufft                             12.0.0.61
+nvidia-cufile                            1.15.1.6
+nvidia-curand                            10.4.0.35
+nvidia-cusolver                          12.0.4.66
+nvidia-cusparse                          12.6.3.3
+nvidia-cusparselt-cu13                   0.8.0
+nvidia-cutlass-dsl                       4.5.2
+nvidia-cutlass-dsl-libs-base             4.5.2
+nvidia-cutlass-dsl-libs-cu13             4.5.2
+nvidia-ml-py                             13.610.43
+nvidia-nccl-cu13                         2.28.9
+nvidia-nvjitlink                         13.0.88
+nvidia-nvshmem-cu13                      3.4.5
+nvidia-nvtx                              13.0.85
+nvidia-nvvm                              13.3.73
+openai                                   2.53.0
+openai-harmony                           0.0.8
+opencv-python-headless                   5.0.0.93
+opentelemetry-api                        1.44.0
+opentelemetry-exporter-otlp              1.44.0
+opentelemetry-exporter-otlp-proto-common 1.44.0
+opentelemetry-exporter-otlp-proto-grpc   1.44.0
+opentelemetry-exporter-otlp-proto-http   1.44.0
+opentelemetry-proto                      1.44.0
+opentelemetry-sdk                        1.44.0
+opentelemetry-semantic-conventions       0.65b0
+opentelemetry-semantic-conventions-ai    0.5.1
+outlines-core                            0.2.14
+packaging                                26.3
+pandas                                   2.3.3
+partial-json-parser                      0.2.1.1.post7
+peft                                     0.20.0
+pillow                                   12.3.0
+pip                                      23.3.1
+prometheus-client                        0.26.0
+prometheus-fastapi-instrumentator        8.1.0
+propcache                                0.5.2
+protobuf                                 3.20.3
+psutil                                   7.2.2
+py-cpuinfo                               9.0.0
+pyarrow                                  25.0.1
+pybase64                                 1.5.0
+pybind11                                 3.1.0
+pycountry                                26.2.16
+pycparser                                3.0
+pydantic                                 2.13.4
+pydantic-core                            2.46.4
+pydantic-extra-types                     2.11.1
+pydantic-settings                        2.15.0
+pyelftools                               0.33
+pygments                                 2.20.0
+pyjwt                                    2.13.0
+python-dateutil                          2.9.0.post0
+python-dotenv                            1.2.2
+python-json-logger                       4.1.0
+python-multipart                         0.0.32
+pytz                                     2026.3.post1
+pyyaml                                   6.0.3
+pyzmq                                    27.1.0
+quack-kernels                            0.5.0
+referencing                              0.37.0
+regex                                    2026.7.19
+requests                                 2.34.2
+rich                                     15.0.0
+rich-toolkit                             0.20.3
+rignore                                  0.8.1
+rpds-py                                  0.30.0
+safetensors                              0.8.0
+scikit-learn                             1.7.2
+scipy                                    1.15.3
+sentence-transformers                    5.7.0
+sentencepiece                            0.2.2
+sentry-sdk                               2.67.1
+setproctitle                             1.3.7
+setuptools                               65.5.0
+shellingham                              1.5.4
+six                                      1.17.0
+sniffio                                  1.3.1
+sse-starlette                            3.4.8
+starlette                                1.6.0
+structlog                                26.1.0
+supervisor                               4.3.0
+sympy                                    1.14.0
+tabulate                                 0.10.0
+threadpoolctl                            3.6.0
+tiktoken                                 0.13.0
+tilelang                                 0.1.9
+tokenizers                               0.22.2
+tokenspeed-mla                           0.1.2
+tokenspeed-triton                        3.8.10.post20260721
+tomli                                    2.4.1
+torch                                    2.11.0
+torch-c-dlpack-ext                       0.1.5
+torchao                                  0.18.0
+torchaudio                               2.11.0
+torchvision                              0.26.0
+tqdm                                     4.70.0
+transformers                             4.57.6
+triton                                   3.6.0
+trl                                      0.24.0
+truststore                               0.10.4
+typeguard                                4.6.0
+typer                                    0.27.1
+typing-extensions                        4.16.0
+typing-inspection                        0.4.3
+tyro                                     1.0.15
+tzdata                                   2026.3
+unsloth                                  2026.8.13
+unsloth-zoo                              2026.8.10
+urllib3                                  2.7.0
+uvicorn                                  0.52.1
+uvloop                                   0.22.1
+vllm                                     0.22.0
+watchfiles                               1.2.0
+websockets                               16.1.1
+wheel                                    0.38.4
+wrapt                                    2.3.0
+xgrammar                                 0.2.5
+xxhash                                   3.8.1
+yarl                                     1.24.5
+z3-solver                                4.15.4.0
+Using Python 3.10.20 environment at: env2
+Checked 234 packages in 2ms
+Found 6 incompatibilities
+The package `opencv-python-headless` requires `numpy>=2 ; python_full_version >= '3.9'`, but `1.26.4` is installed
+The package `googleapis-common-protos` requires `protobuf>=6.33.5,<8.0.0`, but `3.20.3` is installed
+The package `opentelemetry-proto` requires `protobuf>=5.0,<8.0`, but `3.20.3` is installed
+The package `vllm` requires `protobuf>=5.29.6,!=6.30.*,!=6.31.*,!=6.32.*,!=6.33.0.*,!=6.33.1.*,!=6.33.2.*,!=6.33.3.*,!=6.33.4.*`, but `3.20.3` is installed
+The package `opentelemetry-exporter-otlp-proto-grpc` requires `grpcio>=1.63.2,<2.0.0 ; python_full_version < '3.13'`, but `1.43.0` is installed
+The package `unsloth-zoo` requires `wheel>=0.42.0`, but `0.38.4` is installed
+Tue Aug 11 14:56:37 2026       
++-----------------------------------------------------------------------------------------+
+| NVIDIA-SMI 595.71.05              Driver Version: 595.71.05      CUDA Version: 13.2     |
++-----------------------------------------+------------------------+----------------------+
+| GPU  Name                 Persistence-M | Bus-Id          Disp.A | Volatile Uncorr. ECC |
+| Fan  Temp   Perf          Pwr:Usage/Cap |           Memory-Usage | GPU-Util  Compute M. |
+|                                         |                        |               MIG M. |
+|=========================================+========================+======================|
+|   0  NVIDIA L40S                    On  |   00000000:30:00.0 Off |                    0 |
+| N/A   32C    P0             64W /  350W |       0MiB /  46068MiB |      0%      Default |
+|                                         |                        |                  N/A |
++-----------------------------------------+------------------------+----------------------+
+
++-----------------------------------------------------------------------------------------+
+| Processes:                                                                              |
+|  GPU   GI   CI              PID   Type   Process name                        GPU Memory |
+|        ID   ID                                                               Usage      |
+|=========================================================================================|
+|  No running processes found                                                             |
++-----------------------------------------------------------------------------------------+
+Command 'nvcc' not found, but can be installed with:
+sudo apt install nvidia-cuda-toolkit
+Using Python 3.10.20 environment at: env2
+Name: accelerate
+Version: 1.14.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: huggingface-hub, numpy, packaging, psutil, pyyaml, safetensors, torch
+Required-by: peft, trl, unsloth-zoo
+---
+Name: compiler-gym
+Version: 0.2.5
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: absl-py, deprecated, docker, fasteners, grpcio, gym, humanize, loop-tool-py, networkx, numpy, protobuf, pydantic, requests, tabulate
+Required-by:
+---
+Name: datasets
+Version: 4.3.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: dill, filelock, fsspec, httpx, huggingface-hub, multiprocess, numpy, packaging, pandas, pyarrow, pyyaml, requests, tqdm, xxhash
+Required-by: trl, unsloth-zoo
+---
+Name: gym
+Version: 0.21.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: cloudpickle, numpy
+Required-by: compiler-gym
+---
+Name: llvmlite
+Version: 0.47.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires:
+Required-by: numba
+---
+Name: peft
+Version: 0.20.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: accelerate, huggingface-hub, numpy, packaging, psutil, pyyaml, safetensors, torch, tqdm, transformers
+Required-by: unsloth-zoo
+---
+Name: torch
+Version: 2.11.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: cuda-bindings, cuda-toolkit, filelock, fsspec, jinja2, networkx, nvidia-cudnn-cu13, nvidia-cusparselt-cu13, nvidia-nccl-cu13, nvidia-nvshmem-cu13, setuptools, sympy, triton, typing-extensions
+Required-by: accelerate, bitsandbytes, compressed-tensors, cut-cross-entropy, flashinfer-python, humming-kernels, peft, quack-kernels, sentence-transformers, tilelang, tokenspeed-mla, torch-c-dlpack-ext, torchvision, unsloth-zoo, vllm, xgrammar
+---
+Name: transformers
+Version: 4.57.6
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: filelock, huggingface-hub, numpy, packaging, pyyaml, regex, requests, safetensors, tokenizers, tqdm
+Required-by: compressed-tensors, peft, sentence-transformers, trl, unsloth-zoo, vllm, xgrammar
+---
+Name: trl
+Version: 0.24.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: accelerate, datasets, transformers
+Required-by: unsloth-zoo
+---
+Name: unsloth
+Version: 2026.8.13
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: click, nest-asyncio, pydantic, pyyaml, rich, structlog, typer
+Required-by:
+---
+Name: vllm
+Version: 0.22.0
+Location: /home/ubuntu/env2/lib/python3.10/site-packages
+Requires: aiohttp, anthropic, apache-tvm-ffi, blake3, cachetools, cbor2, cloudpickle, compressed-tensors, depyf, diskcache, einops, fastapi, fastsafetensors, filelock, flashinfer-cubin, flashinfer-python, gguf, humming-kernels, ijson, lark, llguidance, lm-format-enforcer, mcp, mistral-common, model-hosting-container-standards, msgspec, ninja, numba, numpy, nvidia-cudnn-frontend, nvidia-cutlass-dsl, openai, openai-harmony, opencv-python-headless, opentelemetry-api, opentelemetry-exporter-otlp, opentelemetry-sdk, opentelemetry-semantic-conventions-ai, outlines-core, partial-json-parser, pillow, prometheus-client, prometheus-fastapi-instrumentator, protobuf, psutil, py-cpuinfo, pybase64, pydantic, python-json-logger, pyyaml, pyzmq, quack-kernels, regex, requests, safetensors, sentencepiece, setproctitle, tiktoken, tilelang, tokenizers, tokenspeed-mla, torch, torchaudio, torchvision, tqdm, transformers, typing-extensions, watchfiles, xgrammar
+Required-by:
+torch: 2.11.0+cu130
+torch CUDA: 13.0
+CUDA available: True
+GPU: NVIDIA L40S
+

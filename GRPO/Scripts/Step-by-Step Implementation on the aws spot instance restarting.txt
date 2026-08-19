@@ -1,0 +1,105 @@
+# To get this daemon to run automatically when the instance is stopped, you need to integrate it with your systemd setup. Your spot_daemon.py actively polls the AWS metadata endpoint # [http://169.254.169.254/latest/meta-data/spot/instance-action](http://169.254.169.254/latest/meta-data/spot/instance-action) every 5 seconds (CHECK_INTERVAL = 5). Because it requires the #Process ID (PID) of your running training script as an argument (train_pid = int(sys.argv[1])), the easiest way to launch both is via a simple bash wrapper.  Here is how to seamlessly tie them together:Step 1: Create a Bash WrapperOn your AWS instance, create a short script that launches the trainer in the background, grabs its PID, and passes it to the daemon.Open a new file:Bash
+
+
+nano /home/ubuntu/run_with_daemon.sh
+
+
+
+
+
+#!/bin/bash
+
+# Duplicate all terminal output to the log file AND the tmux screen
+exec > >(tee -a /home/ubuntu/training.log) 2>&1
+
+echo "Starting GRPO Training inside tmux..."
+
+# 1. Start the training script (Updated filename)
+/home/ubuntu/env2/bin/python /home/ubuntu/run_phase4.py &
+
+# 2. Capture the Process ID (PID) of the training script
+TRAIN_PID=$!
+
+# 3. Start the spot daemon in the foreground, passing the PID (Updated filename)
+/home/ubuntu/env2/bin/python /home/ubuntu/checkpoint_saving_daemon_aws.py $TRAIN_PID
+
+
+
+
+
+
+# Save and exit, then make the script executable:Bash
+
+chmod +x /home/ubuntu/run_with_daemon.sh
+
+
+# Step 2: Update Your Systemd ServiceNow, you just need to tell Linux to run this new wrapper script instead of launching the Python script directly.Open your existing service file:Bash
+
+sudo nano /etc/systemd/system/grpo-train.service
+
+
+
+
+
+
+
+
+# Step-by-Step Implementation on the AWS Instance:
+# SSH into your running AWS instance.
+
+# Open the systemd service file editor:
+
+sudo nano /etc/systemd/system/grpo-train.service
+# Paste in this corrected configuration:
+
+
+
+
+
+
+[Unit]
+Description=GRPO DeepSeek Training Auto-Resume (Tmux Integration)
+After=network.target
+
+[Service]
+# Forking tells systemd that the initial command will detach (which tmux does)
+Type=forking
+User=ubuntu
+WorkingDirectory=/home/ubuntu
+
+# Create a detached tmux session named 'grpo_run' and run the bash wrapper inside it
+ExecStart=/usr/bin/tmux new-session -d -s grpo_run '/bin/bash /home/ubuntu/run_with_daemon.sh'
+
+# Tell systemd how to gracefully shut down the tmux session if needed
+ExecStop=/usr/bin/tmux kill-session -t grpo_run
+
+# If the tmux session crashes or AWS interrupts it, wait 10 seconds and restart
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+
+
+
+
+
+# Save and exit the text editor (Ctrl+O, Enter, Ctrl+X).
+
+# Tell Linux to recognize your new background service:
+
+sudo systemctl daemon-reload
+sudo systemctl enable grpo-train.service
+
+sudo systemctl start grpo-train.service
+
+
+# 3. How this works in practice
+#If AWS reclaims your Spot instance tonight, the server will shut down. Because run_phase4_v5.py has save_steps=400, the latest weights are saved to disk.
+
+#When AWS gives the instance back tomorrow, the Linux OS boots up. Systemd reads grpo-train.service, realizes it needs to run your python command, and automatically launches run_phase4_v5.py. The Hugging Face TRL trainer will detect your checkpoint folder, load the weights, and resume training right where it left off, all while you are asleep.
+
+# To check your training progress at any time, just run:
+
+tail -f /home/ubuntu/training.log
