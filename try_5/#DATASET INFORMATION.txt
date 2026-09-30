@@ -1,0 +1,103 @@
+(env) basil@DESKTOP-NP4041L:~/rlc-project$ python sft_script6_working.py
+Loading Experiment_1_2.csv...
+Filtering for valid datasets...
+Parsing pass sequences for balancing...
+
+==================================================
+[*] RAW DATA DIAGNOSTIC:
+[*] Total unique passes available in the filtered source CSV: 79 out of 125
+==================================================
+
+Parsing pass sequences for balancing...
+Loading existing balanced dataset from balanced_4000_checkpoints.csv...
+
+==================================================
+ PASS DISTRIBUTION TRACKER
+==================================================
+Total rows in dataset: 4000
+Total unique passes used: 79
+Min occurrences of a pass: 59
+Max occurrences of a pass: 4533
+Spread (Max - Min): 4474
+
+Detailed Counts (Least to Most Frequent):
+    59 | --break-crit-edges
+    60 | --reg2mem
+    74 | --lowerswitch
+    78 | --loop-unroll
+    80 | --loop-guard-widening
+    82 | --inferattrs
+    83 | --irce
+    85 | --loop-load-elim
+    85 | --separate-const-offset-from-gep
+    86 | --loop-idiom
+    86 | --loop-simplify
+    89 | --loop-unswitch
+    90 | --loop-interchange
+    90 | --loop-versioning-licm
+    91 | --loop-predication
+    91 | --partially-inline-libcalls
+    91 | --simple-loop-unswitch
+    93 | --sink
+    94 | --loop-sink
+    95 | --loop-vectorize
+    97 | --strip-nondebug
+    99 | --functionattrs
+   102 | --tailcallelim
+   103 | --hotcoldsplit
+   109 | --ipconstprop
+   110 | --deadargelim
+   110 | --mergereturn
+   111 | --float2int
+   114 | --loop-unroll-and-jam
+   115 | --scalarizer
+   120 | --strip
+   135 | --speculative-execution
+   183 | --lowerinvoke
+   643 | --globaldce
+   643 | --loop-fusion
+   643 | --loweratomic
+   884 | --loop-reduce
+   897 | --indvars
+  1056 | --loop-rotate
+  1160 | --loop-deletion
+  1240 | --slsr
+  1479 | --loop-reroll
+  1527 | --memcpyopt
+  1614 | --prune-eh
+  1616 | --flattencfg
+  1618 | --mldst-motion
+  2119 | --loop-instsimplify
+  2144 | --nary-reassociate
+  2232 | --sccp
+  2252 | --correlated-propagation
+  2295 | --dce
+  2377 | --bdce
+  2380 | --licm
+  2394 | --adce
+  2520 | --globalopt
+  2564 | --die
+  2586 | --lower-expect
+  2600 | --slp-vectorizer
+  2674 | --instsimplify
+  2684 | --reassociate
+  2725 | --loop-simplifycfg
+  2824 | --load-store-vectorizer
+  2866 | --dse
+  2937 | --lower-constant-intrinsics
+  3111 | --ipsccp
+  3158 | --mem2reg
+  3401 | --sroa
+  3524 | --inline
+  3603 | --aggressive-instcombine
+  3653 | --mergefunc
+  3712 | --elim-avail-extern
+  3770 | --gvn
+  3770 | --jump-threading
+  3861 | --gvn-hoist
+  3936 | --early-cse
+  3970 | --early-cse-memssa
+  4132 | --newgvn
+  4483 | --simplifycfg
+  4533 | --instcombine
+==================================================

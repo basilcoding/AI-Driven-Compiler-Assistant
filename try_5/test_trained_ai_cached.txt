@@ -1,0 +1,246 @@
+import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+import re
+import torch
+from unsloth import FastLanguageModel
+from transformers import TextStreamer
+
+# ==========================================
+# 1. CONFIG
+# ==========================================
+MAX_SEQ_LENGTH = 10000   
+MODEL_PATH = "sft_step500_merged_16bit"
+LOAD_IN_4BIT = False
+
+# ==========================================
+# 2. SPELLBOOK & COMPILER DICTIONARY
+# ==========================================
+PASS_DESCRIPTIONS = {
+    "--add-discriminators": "Add discriminators for better debug info.",
+    "--adce": "Aggressively eliminate dead code.",
+    "--aggressive-instcombine": "Aggressive instruction combining.",
+    "--alignment-from-assumptions": "Optimize memory alignment based on assumptions.",
+    "--always-inline": "Inline all always_inline functions.",
+    "--argpromotion": "Promote arguments from byref to byval.",
+    "--attributor": "Propagate attributes across modules.",
+    "--barrier": "Place barriers before code generation.",
+    "--bdce": "Bit-level dead code elimination.",
+    "--break-crit-edges": "Break critical edges to simplify CFG.",
+    "--simplifycfg": "Simplify the control flow graph.",
+    "--callsite-splitting": "Split indirect call sites based on constants.",
+    "--called-value-propagation": "Propagate called values at indirect call sites.",
+    "--canonicalize-aliases": "Canonicalize aliases for better analysis.",
+    "--consthoist": "Hoist constants to higher scopes.",
+    "--constmerge": "Merge duplicate constants.",
+    "--constprop": "Simple constant propagation.",
+    "--coro-cleanup": "Remove coroutine scheduling remnants.",
+    "--coro-early": "Early coroutine transformation.",
+    "--coro-elide": "Remove unnecessary coroutine constructs.",
+    "--coro-split": "Split coroutines into multiple functions.",
+    "--correlated-propagation": "Propagate correlated value info.",
+    "--cross-dso-cfi": "Cross-DSO control flow integrity.",
+    "--deadargelim": "Remove unused function arguments.",
+    "--dce": "Dead code elimination.",
+    "--die": "Dead instruction elimination.",
+    "--dse": "Dead store elimination.",
+    "--reg2mem": "Convert registers to stack memory references.",
+    "--div-rem-pairs": "Optimize division and remainder pairs.",
+    "--early-cse-memssa": "Early CSE based on memory SSA.",
+    "--early-cse": "Early common subexpression elimination.",
+    "--elim-avail-extern": "Convert available external globals to definitions.",
+    "--ee-instrument": "Instrument exception handling for stack space.",
+    "--flattencfg": "Flatten the control flow graph.",
+    "--float2int": "Optimize floating-point to integer computations.",
+    "--forceattrs": "Force setting function attributes.",
+    "--inline": "Inline function code at call sites.",
+    "--insert-gcov-profiling": "Insert GCOV-compatible instrumentation.",
+    "--gvn-hoist": "Hoist redundant expressions.",
+    "--gvn": "Global value numbering.",
+    "--globaldce": "Global dead code elimination.",
+    "--globalopt": "Global variable optimization.",
+    "--globalsplit": "Split global variables into fragments.",
+    "--guard-widening": "Widen guard conditions.",
+    "--hotcoldsplit": "Split hot and cold paths.",
+    "--ipconstprop": "Interprocedural constant propagation.",
+    "--ipsccp": "Interprocedural sparse conditional constant propagation.",
+    "--indvars": "Canonicalize loop induction variables.",
+    "--irce": "Inductive range check elimination.",
+    "--infer-address-spaces": "Infer address spaces.",
+    "--inferattrs": "Infer attributes for unknown functions.",
+    "--inject-tli-mappings": "Inject target library info mappings.",
+    "--instsimplify": "Remove redundant instructions.",
+    "--instcombine": "Combine instructions into simpler forms.",
+    "--instnamer": "Assign names to unnamed instructions.",
+    "--jump-threading": "Thread conditional jumps.",
+    "--lcssa": "Convert loops to loop-closed SSA form.",
+    "--licm": "Move loop-invariant code out of loops.",
+    "--libcalls-shrinkwrap": "Optimize library call wrappers.",
+    "--load-store-vectorizer": "Vectorize adjacent loads and stores.",
+    "--loop-data-prefetch": "Prefetch data in loops.",
+    "--loop-deletion": "Delete useless loops.",
+    "--loop-distribute": "Distribute loops for parallelism.",
+    "--loop-fusion": "Fuse loops to reduce overhead.",
+    "--loop-guard-widening": "Widen loop guard conditions.",
+    "--loop-idiom": "Recognize and replace common idioms in loops.",
+    "--loop-instsimplify": "Simplify instructions in loops.",
+    "--loop-interchange": "Interchange nested loops.",
+    "--loop-load-elim": "Eliminate redundant loads in loops.",
+    "--loop-predication": "Convert branches in loops to selects.",
+    "--loop-reroll": "Reroll unrolled loops.",
+    "--loop-rotate": "Rotate loops for better execution.",
+    "--loop-simplifycfg": "Simplify loop control flow graph.",
+    "--loop-simplify": "Canonicalize loop form.",
+    "--loop-sink": "Sink instructions in loops.",
+    "--loop-reduce": "Loop strength reduction.",
+    "--loop-unroll-and-jam": "Unroll and jam nested loops.",
+    "--loop-unroll": "Unroll loops.",
+    "--loop-unswitch": "Extract conditions from loops.",
+    "--loop-vectorize": "Vectorize loops.",
+    "--loop-versioning-licm": "Create loop versions for LICM.",
+    "--loop-versioning": "Create multiple loop versions.",
+    "--loweratomic": "Lower atomic instructions.",
+    "--lower-constant-intrinsics": "Lower constant intrinsics.",
+    "--lower-expect": "Lower llvm.expect intrinsics.",
+    "--lower-guard-intrinsic": "Lower guard intrinsics.",
+    "--lowerinvoke": "Lower invoke and unwind instructions.",
+    "--lower-matrix-intrinsics": "Lower matrix operation intrinsics.",
+    "--lowerswitch": "Lower switch instructions.",
+    "--lower-widenable-condition": "Lower widenable conditions.",
+    "--memcpyopt": "Optimize memory copy operations.",
+    "--mergefunc": "Merge duplicate functions.",
+    "--mergeicmps": "Merge consecutive compare instructions.",
+    "--mldst-motion": "Move memory load/store operations.",
+    "--sancov": "Instrument sanitizer coverage.",
+    "--name-anon-globals": "Name anonymous global variables.",
+    "--nary-reassociate": "Reassociate n-ary expressions.",
+    "--newgvn": "New global value numbering.",
+    "--pgo-memop-opt": "Profile-guided memory operation optimization.",
+    "--partial-inliner": "Partially inline hot paths.",
+    "--partially-inline-libcalls": "Partially inline library calls.",
+    "--post-inline-ee-instrument": "Instrument exception handling after inlining.",
+    "--functionattrs": "Infer function attributes.",
+    "--mem2reg": "Convert memory references to registers.",
+    "--prune-eh": "Remove unreachable exception handling code.",
+    "--reassociate": "Reassociate expressions.",
+    "--redundant-dbg-inst-elim": "Remove redundant debug instructions.",
+    "--rpo-functionattrs": "Infer function attributes in reverse postorder.",
+    "--rewrite-statepoints-for-gc": "Rewrite statepoints for garbage collection.",
+    "--sccp": "Sparse conditional constant propagation.",
+    "--slp-vectorizer": "Superword-level parallelism vectorization.",
+    "--sroa": "Scalar replacement of aggregates.",
+    "--scalarizer": "Convert vector operations to scalar operations.",
+    "--separate-const-offset-from-gep": "Separate constant offsets from GEP instructions.",
+    "--simple-loop-unswitch": "Simplified loop unswitching.",
+    "--sink": "Sink instructions to their use points.",
+    "--speculative-execution": "Speculatively execute instructions.",
+    "--slsr": "Straight-line strength reduction.",
+    "--strip-dead-prototypes": "Remove unused function prototypes.",
+    "--strip-debug-declare": "Remove debug declarations.",
+    "--strip-nondebug": "Remove all non-debug information.",
+    "--strip": "Remove all symbol information.",
+    "--tailcallelim": "Eliminate tail calls.",
+    "--mergereturn": "Merge multiple return points into one.",
+    "-Oz": "Optimize aggressively for size."
+}
+
+_CANONICAL_BY_STRIPPED = {p.lstrip('-').lower(): p for p in PASS_DESCRIPTIONS}
+
+def canonicalize_pass(name: str) -> str:
+    key = name.strip().lstrip('-').lower()
+    return _CANONICAL_BY_STRIPPED.get(key, name) 
+
+def format_spellbook_by_category() -> str:
+    buckets = {}
+    for p, desc in PASS_DESCRIPTIONS.items():
+        clean_desc = desc.rstrip('.')
+        buckets.setdefault(clean_desc, []).append(p)
+        
+    return "\n".join(
+        f"  - {desc}: {', '.join(sorted(names))}"
+        for desc, names in sorted(buckets.items())
+    )
+
+GRAND_SPELLBOOK_BLOCK = format_spellbook_by_category()
+
+rules = (
+    "Rules:\n"
+    "- Pick however many passes are actually useful — no bonus for more, no penalty for fewer.\n"
+    "- End with your chosen passes as a JSON array of strings inside <answer>...</answer>, nothing else inside the tags.\n"
+)
+
+SYSTEM_PROMPT = (
+    "You are an LLVM Compiler RL Agent. Your objective is to discover a custom sequence of optimization passes that will shrink the instruction count of the given IR even further than the standard '-Oz' optimization level.\n\n"
+    "The only passes you can use along with their descriptions are:\n"
+    f"{GRAND_SPELLBOOK_BLOCK}\n\n"
+    f"{rules}"
+)
+
+# ==========================================
+# 3. LOAD MODEL 
+# ==========================================
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = MODEL_PATH,
+    max_seq_length = MAX_SEQ_LENGTH,
+    load_in_4bit = LOAD_IN_4BIT,
+)
+FastLanguageModel.for_inference(model)
+
+# THIS IS THE MISSING LINE:
+streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+
+print("\n" + "="*60)
+print("Model loaded! Ready for inputs.")
+
+while True:
+    print("\n" + "="*60)
+    print("Paste your AutoPhase dictionary (or type 'quit' to exit).")
+    print("IMPORTANT: When you are done pasting, press Enter on a BLANK LINE to start generating:")
+    
+    # Read multi-line input until a blank line
+    lines = []
+    while True:
+        line = input()
+        if not line: # Break the loop if the line is completely blank
+            break
+        lines.append(line)
+        
+    user_input = "\n".join(lines).strip()
+    if user_input.lower() == "quit":
+        break
+    if not user_input:
+        continue
+
+    # Format the prompt
+    USER_PROMPT = f"\nAutoPhase: {user_input}\n\nRemember: conclude your response with exactly one <answer>...</answer> block containing a JSON array of pass names as strings."
+    
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": USER_PROMPT},
+    ]
+
+    prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+    inputs = tokenizer(prompt, return_tensors="pt", add_special_tokens=True).to(model.device)
+
+    print("\nGenerating...")
+    with torch.no_grad():
+        output_ids = model.generate(
+            **inputs,
+            streamer = streamer, # Now this variable actually exists!
+            max_new_tokens = 3000,
+            temperature = 0.6,
+            top_p = 0.95,
+            do_sample = True,
+            eos_token_id = tokenizer.eos_token_id,
+            pad_token_id = tokenizer.eos_token_id,
+        )
+
+    # Extract answer
+    full_text = tokenizer.decode(output_ids[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+    m = re.search(r"<answer>\s*(.*?)\s*</answer>", full_text, re.DOTALL)
+    
+    print("\n" + "-" * 30)
+    if m:
+        passes = [p.strip() for p in m.group(1).split(",") if p.strip()]
+        print(f"EXTRACTED PASS SEQUENCE ({len(passes)} passes):\n{','.join(passes)}")
+    else:
+        print("WARNING: no <answer>...</answer> block found in output!")

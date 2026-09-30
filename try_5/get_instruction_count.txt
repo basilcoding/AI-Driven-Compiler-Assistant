@@ -1,0 +1,18 @@
+import compiler_gym
+
+# Initialize the LLVM environment
+with compiler_gym.make("llvm-v0") as env:
+    
+    # 1. Load the custom .ll file
+    # make_benchmark natively accepts .ll (IR text format) and handles the conversion
+    # benchmark = env.make_benchmark("npb-v0_83.ll")
+    benchmark = env.make_benchmark("output_oz.ll")
+    # benchmark = env.make_benchmark("output_custom.ll")
+    
+    # 2. Bind the benchmark to the current environment session
+    env.reset(benchmark=benchmark)
+    
+    # 3. Query the instruction count directly using a one-off observation
+    inst_count = env.observation["IrInstructionCount"]
+    
+    print(f"Total IR Instructions: {inst_count}")

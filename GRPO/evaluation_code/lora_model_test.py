@@ -24,7 +24,7 @@ from vllm.lora.request import LoRARequest # <--- REQUIRED
 BASE_SFT_MODEL = "bcoding/deepseek-R1-0528-Qwen3-8b-base-16-llvm-sft-trained-16bit-epoch-2-merged"
 
 # 2. LoRA Adapter to apply on top
-GRPO_CHECKPOINT_DIR = "compiler-llvm-deepseek-8b-grpo-checkpoints/checkpoint-730"
+GRPO_CHECKPOINT_DIR = "compiler-llvm-deepseek-8b-grpo-checkpoints/checkpoint-1550"
 
 # 3. Output File
 OUTPUT_FILE = "results_lora_grpo.json"  

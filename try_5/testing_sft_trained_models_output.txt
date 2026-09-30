@@ -1,0 +1,314 @@
+#output
+
+============================================================
+ EVALUATION SUMMARY (LOCAL UNSEEN DATA)
+============================================================
+Total benchmarks tested: 250
+Model 1 (Epoch 1) Beat -Oz on: 5 / 250 files
+Model 2 (Epoch 2) Beat -Oz on: 6 / 250 files
+------------------------------------------------------------
+HEAD-TO-HEAD:
+Model 1 strictly better on: 46
+Model 2 strictly better on: 89
+Tie (same instruction count): 115
+============================================================
+Detailed raw results saved to: model_comparison_results.json
+
+
+
+#code
+import os
+import re
+import json
+import random
+import gc
+import torch
+import compiler_gym
+from tqdm import tqdm
+from unsloth import FastLanguageModel
+
+# ==========================================
+# 1. CONFIGURATION
+# ==========================================
+
+MODELS = [
+    "bcoding/deepseek-R1-0528-Qwen3-8b-base-16-llvm-sft-trained-16bit-epoch-1-merged",
+    "bcoding/deepseek-R1-0528-Qwen3-8b-base-16-llvm-sft-trained-16bit-epoch-2-merged"
+]
+
+IR_CACHE_DIR = "ir_cache"
+SFT_TRAINED_NAMES_FILE = "sft_trained_names.json"
+NUM_TEST_BENCHMARKS = 250
+OUTPUT_REPORT = "model_comparison_results.json"
+BATCH_SIZE = 32  # Safe batch size for 8B models on a 48GB GPU
+
+RULES = (
+    "Rules:\n"
+    "- Pick however many passes are actually useful — no bonus for more, no penalty for fewer.\n"
+    "- End with your chosen passes as a JSON array of strings inside <answer>...</answer>, nothing else inside the tags.\n"
+)
+
+SYS_PROMPT = (
+    "You are an LLVM Compiler RL Agent. Your objective is to discover a custom sequence of optimization passes that will shrink the instruction count of the given IR even further than the standard '-Oz' optimization level.\n\n"
+    f"{RULES}"
+)
+
+# ==========================================
+# 2. UNSLOTH BATCH GENERATION
+# ==========================================
+
+def batch_generate_unsloth(model_id, prompt_messages, batch_size=32):
+    """Loads model via Unsloth, generates answers in batches, and aggressively frees VRAM."""
+    print(f"\n[+] Loading model: {model_id} via Unsloth...")
+    
+    # Load model and tokenizer (load_in_4bit=False since you have 48GB VRAM)
+    model, tokenizer = FastLanguageModel.from_pretrained(
+        model_name=model_id,
+        max_seq_length=5696,
+        dtype=torch.bfloat16,
+        load_in_4bit=False, 
+    )
+    FastLanguageModel.for_inference(model) # Enable native 2x faster inference
+    
+    # Crucial for batch generation in HuggingFace
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    all_results = []
+    
+    print(f"[*] Generating responses for {len(prompt_messages)} prompts (Batch Size: {batch_size})...")
+    
+    for i in tqdm(range(0, len(prompt_messages), batch_size), desc="Inferencing"):
+        batch_msgs = prompt_messages[i:i+batch_size]
+        
+        # Apply Qwen/DeepSeek Chat Template
+        texts = [tokenizer.apply_chat_template(m, add_generation_prompt=True, tokenize=False) for m in batch_msgs]
+        
+        inputs = tokenizer(texts, return_tensors="pt", padding=True, truncation=True).to("cuda")
+        input_len = inputs.input_ids.shape[1]
+        
+        # Generate passes
+        outputs = model.generate(
+            **inputs, 
+            max_new_tokens=3048, 
+            temperature=0.8, 
+            top_k=50,
+            do_sample=True,
+            pad_token_id=tokenizer.pad_token_id
+        )
+        
+        # Decode only the newly generated text (slice out the prompt)
+        for out in outputs:
+            gen_text = tokenizer.decode(out[input_len:], skip_special_tokens=True)
+            all_results.append(gen_text)
+
+    # ---------------------------------------------------------
+    # MEMORY CLEANUP: Delete model completely to free the 48GB GPU
+    # ---------------------------------------------------------
+    print("[*] Unloading model to free VRAM for the next model...")
+    del model
+    del tokenizer
+    gc.collect()
+    torch.cuda.empty_cache()
+    
+    return all_results
+
+# ==========================================
+# 3. HELPER FUNCTIONS
+# ==========================================
+
+def get_action_indices(env, pass_list):
+    """Converts a Python list of pass strings into CompilerGym action indices."""
+    action_indices = []
+    for p in pass_list:
+        clean_p = p.strip().lstrip('-').lower()
+        flag = f"-{clean_p}"
+        if clean_p == 'early-cse<memssa>':
+            flag = '-early-cse-memssa'
+            
+        if flag in env.action_space.flags:
+            action_indices.append(env.action_space.flags.index(flag))
+    return action_indices
+
+def extract_passes(text: str):
+    """Robust pass extraction matching the logic in reward_system.py."""
+    THINK_CLOSE_TAG = "</think>"
+    ANSWER_PATTERN = re.compile(r"<answer\s*>\s*(.*?)\s*</answer\s*>", re.DOTALL | re.IGNORECASE)
+    _STRAY_WRAPPER_CHARS = "[]'\"`() "
+
+    idx = text.rfind(THINK_CLOSE_TAG)
+    post_think = text[idx + len(THINK_CLOSE_TAG):] if idx != -1 else text
+
+    matches = ANSWER_PATTERN.findall(post_think)
+    if not matches:
+        return []
+    
+    raw = matches[-1].strip()
+    try:
+        names = json.loads(raw)
+        if isinstance(names, list):
+            return names
+    except json.JSONDecodeError:
+        pass
+    
+    tokens = re.split(r"[,\n]", raw)
+    names = [t.strip().strip(_STRAY_WRAPPER_CHARS).strip() for t in tokens]
+    return [n for n in names if n]
+
+# ==========================================
+# 4. BENCHMARK SELECTION (FROM LOCAL IR_CACHE)
+# ==========================================
+
+def get_unseen_local_files():
+    """Finds up to 250 random local .ll files that are NOT in the SFT training dataset."""
+    excluded_set = set()
+    if os.path.exists(SFT_TRAINED_NAMES_FILE):
+        with open(SFT_TRAINED_NAMES_FILE, "r") as f:
+            excluded_set = set(json.load(f))
+        print(f"[*] Loaded {len(excluded_set)} EXCLUDED benchmark names from {SFT_TRAINED_NAMES_FILE}.")
+    else:
+        print(f"[Warning] {SFT_TRAINED_NAMES_FILE} not found. No exclusion applied.")
+
+    if not os.path.exists(IR_CACHE_DIR):
+        raise FileNotFoundError(f"Directory {IR_CACHE_DIR} does not exist.")
+
+    available_files = []
+    
+    print(f"[*] Scanning {IR_CACHE_DIR} for unseen .ll files...")
+    for fname in os.listdir(IR_CACHE_DIR):
+        if not fname.endswith(".ll"):
+            continue
+            
+        base_name = fname[:-3] 
+        
+        if base_name not in excluded_set:
+            full_path = os.path.join(IR_CACHE_DIR, fname)
+            available_files.append((base_name, full_path))
+
+    random.shuffle(available_files)
+    selected_files = available_files[:NUM_TEST_BENCHMARKS]
+    
+    print(f"[*] Selected {len(selected_files)} unseen local benchmarks for evaluation.")
+    return selected_files
+
+# ==========================================
+# 5. MAIN EXECUTION PIPELINE
+# ==========================================
+
+def main():
+    dataset = []
+    
+    print("\n[+] Phase 1: Extracting Autophase Features & -Oz Baseline...")
+    
+    with compiler_gym.make("llvm-v0") as env:
+        test_files = get_unseen_local_files()
+        
+        if not test_files:
+            print("Error: No available unseen benchmarks found in ir_cache.")
+            return
+
+        for base_name, filepath in tqdm(test_files, desc="Gym Extraction"):
+            try:
+                benchmark = env.make_benchmark(filepath)
+                env.reset(benchmark=benchmark)
+            except Exception as e:
+                print(f"[Warning] Failed to load {filepath}: {e}")
+                continue
+                
+            input_count = env.observation["IrInstructionCount"]
+            oz_count = env.observation["IrInstructionCountOz"]
+            autophase_dict = env.observation["AutophaseDict"]
+            
+            feat_str = ", ".join(f"'{k}': {v}" for k, v in autophase_dict.items())
+            user_prompt = f"\nAutoPhase: {{ {feat_str} }}\n\nRemember: conclude your response with exactly one <answer>...</answer> block containing a JSON array of pass names as strings."
+            
+            messages = [
+                {"role": "system", "content": SYS_PROMPT},
+                {"role": "user", "content": user_prompt}
+            ]
+            
+            dataset.append({
+                "filename": base_name,
+                "filepath": filepath,
+                "input_count": input_count,
+                "oz_count": oz_count,
+                "messages": messages
+            })
+
+    if not dataset:
+        print("No valid benchmarks successfully loaded into CompilerGym. Exiting.")
+        return
+
+    # 3. Run Inference Pipeline
+    all_prompts = [item["messages"] for item in dataset]
+    
+    print("\n[+] Phase 2: Evaluating Model 1 (Epoch 1)...")
+    responses_m1 = batch_generate_unsloth(MODELS[0], all_prompts, batch_size=BATCH_SIZE)
+    
+    print("\n[+] Phase 3: Evaluating Model 2 (Epoch 2)...")
+    responses_m2 = batch_generate_unsloth(MODELS[1], all_prompts, batch_size=BATCH_SIZE)
+    
+    # 4. Extract passes and Evaluate against CompilerGym
+    print("\n[+] Phase 4: Validating Output in CompilerGym...")
+    
+    model1_beats_oz = 0
+    model2_beats_oz = 0
+    
+    with compiler_gym.make("llvm-v0") as env:
+        for idx, item in enumerate(tqdm(dataset, desc="Evaluating Passes")):
+            filepath = item["filepath"]
+            
+            try:
+                benchmark = env.make_benchmark(filepath)
+            except:
+                continue
+            
+            # -- Model 1 Eval --
+            passes_m1 = extract_passes(responses_m1[idx])
+            item["passes_m1"] = passes_m1
+            env.reset(benchmark=benchmark)
+            for action in get_action_indices(env, passes_m1):
+                env.step(action)
+            item["m1_count"] = env.observation["IrInstructionCount"]
+            
+            # -- Model 2 Eval --
+            passes_m2 = extract_passes(responses_m2[idx])
+            item["passes_m2"] = passes_m2
+            env.reset(benchmark=benchmark)
+            for action in get_action_indices(env, passes_m2):
+                env.step(action)
+            item["m2_count"] = env.observation["IrInstructionCount"]
+            
+            # -- Tracking stats --
+            if item["m1_count"] < item["oz_count"]: model1_beats_oz += 1
+            if item["m2_count"] < item["oz_count"]: model2_beats_oz += 1
+
+    # 5. Final Report
+    for d in dataset:
+        del d["messages"]
+        
+    with open(OUTPUT_REPORT, "w") as f:
+        json.dump(dataset, f, indent=4)
+        
+    print("\n" + "="*60)
+    print(" EVALUATION SUMMARY (LOCAL UNSEEN DATA)")
+    print("="*60)
+    print(f"Total benchmarks tested: {len(dataset)}")
+    print(f"Model 1 (Epoch 1) Beat -Oz on: {model1_beats_oz} / {len(dataset)} files")
+    print(f"Model 2 (Epoch 2) Beat -Oz on: {model2_beats_oz} / {len(dataset)} files")
+    
+    m1_wins = sum(1 for d in dataset if d["m1_count"] < d["m2_count"])
+    m2_wins = sum(1 for d in dataset if d["m2_count"] < d["m1_count"])
+    ties = len(dataset) - m1_wins - m2_wins
+    
+    print("-" * 60)
+    print("HEAD-TO-HEAD:")
+    print(f"Model 1 strictly better on: {m1_wins}")
+    print(f"Model 2 strictly better on: {m2_wins}")
+    print(f"Tie (same instruction count): {ties}")
+    print("="*60)
+    print(f"Detailed raw results saved to: {OUTPUT_REPORT}")
+
+if __name__ == "__main__":
+    main()

@@ -9,7 +9,7 @@ from tqdm import tqdm
 # ==========================================
 # CONFIGURATION (CHANGE THESE TO MATCH YOUR FILES)
 # ==========================================
-FILE_A = "results_sft_base_model_epoch_2.json"
+FILE_A = "results_sft_lora_model.json"
 FILE_B = "results_sft_base_model.json"
 
 MODEL_A_NAME = "SFT BASE MODEL EPOCH"

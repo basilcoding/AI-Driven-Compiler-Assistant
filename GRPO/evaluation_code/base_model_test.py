@@ -19,7 +19,7 @@ from vllm import SamplingParams
 # 1. CONFIGURATION (CHANGE THESE BEFORE RUNNING)
 # ==========================================
 
-MODEL_PATH = "compiler-llvm-deepseek-8b-grpo-checkpoints/checkpoint-720"
+MODEL_PATH = "compiler-llvm-deepseek-8b-grpo-checkpoints/checkpoint-1500"
 OUTPUT_FILE = "results_grpo_lora_model.json"  # Change this for the second run!
 
 IR_CACHE_DIR = "ir_cache"

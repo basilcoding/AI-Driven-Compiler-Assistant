@@ -1,0 +1,174 @@
+# 1. Update OS toolchains
+
+sudo apt update && sudo apt install -y software-properties-common build-essential clang-14 llvm-14 wget git tmux
+
+
+
+# 2. Summon Python 3.10 via deadsnakes
+
+sudo add-apt-repository -y ppa:deadsnakes/ppa
+
+sudo apt update
+
+sudo apt install -y python3.10 python3.10-venv python3.10-dev
+
+
+
+# 3. Patch Ubuntu 22.04 with legacy libtinfo5 (Mandatory for Gym 0.21)
+
+wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2_amd64.deb
+
+wget http://archive.ubuntu.com/ubuntu/pool/universe/n/ncurses/libncurses5_6.3-2_amd64.deb
+
+sudo dpkg -i libtinfo5_6.3-2_amd64.deb libncurses5_6.3-2_amd64.deb
+
+rm *.deb
+
+
+
+# 4. Create the clean Python 3.10 airlock
+
+python3.10 -m venv ~/env
+
+source ~/env/bin/activate
+
+python --version
+
+
+
+# 1. Downgrade pip & lay legacy wheel foundation
+
+pip install pip==23.3.1
+
+
+# 2. Lock Unsloth (Pulls native PyTorch 2.4 / CUDA 12.1 for the L40S)
+
+pip install "unsloth[colab-new] @ git+https://github.com/unslothai/unsloth.git"
+
+
+
+
+# 3. Bind TRL and vLLM generation engines
+
+pip install --no-deps trl
+
+pip install accelerate transformers datasets peft vllm
+
+
+
+# 4. Bind CompilerGym
+
+pip install setuptools==65.5.0 wheel==0.38.4
+
+pip install gym==0.21.0 --no-build-isolation
+
+pip install compiler_gym llvmlite "numpy<2"
+
+
+
+
+
+tmux new -s grpo_run
+echo "set -g mouse on" >> ~/.tmux.conf
+tmux source-file ~/.tmux.conf
+
+
+mkdir -p ~/logs
+tmux pipe-pane -o 'cat >> ~/logs/train_capture.log'
+
+
+
+# 5. Sanity check
+python -c "import unsloth; print('Unsloth Version: ', unsloth.__version__)"
+# Unsloth Version:  2026.6.9
+
+python -c "import gym, compiler_gym; print('Gym SOTA operational:', gym.__version__)"
+
+
+
+
+
+
+
+# llvm stuff needed for grpo
+
+
+# 1. Create a toolchain directory in your project folder
+mkdir -p ~/rlc-project/llvm-10-toolchain
+cd ~/rlc-project/llvm-10-toolchain
+
+# 2. Download the official LLVM 10 pre-built binaries for Linux
+wget https://github.com/llvm/llvm-project/releases/download/llvmorg-10.0.0/clang+llvm-10.0.0-x86_64-linux-gnu-ubuntu-18.04.tar.xz
+
+# 3. Extract the files directly into your toolchain directory
+tar -xvf clang+llvm-10.0.0-*.tar.xz --strip-components=1
+
+# 4. Clean up the downloaded archive
+rm clang+llvm-10.0.0-*.tar.xz
+
+# 5. Verify the installation
+./bin/opt --version
+./bin/clang --version
+
+
+
+
+
+
+# Run this ONLY if ./bin/opt throws a "libtinfo.so.5" missing error
+# wget http://security.ubuntu.com/ubuntu/pool/universe/n/ncurses/libtinfo5_6.3-2ubuntu0.1_amd64.deb
+# sudo apt install ./libtinfo5_6.3-2ubuntu0.1_amd64.deb
+
+
+
+
+
+
+
+
+
+# Delete the smoke artifacts first so nothing stale survives (only run it after the smoke test of prepare_dataset(grpo))
+# rm -rf compiler_dataset_train ir_cache oz_baselines.json
+
+# github-v0: 18000 scanned, 1907 kept (10.6% survival)
+# github-v0: target 2000 reached after 18866 scanned
+
+# linux-v0: 6000 scanned, 1912 kept (31.9% survival)
+# linux-v0: target 2000 reached after 6252 scanned
+
+# poj104-v1: 4000 scanned, 1682 kept (42.0% survival)
+# poj104-v1: target 2000 reached after 4761 scanned
+
+
+
+
+
+
+
+
+
+
+
+
+
+# example passing of passes in the pipeline (syntax of llvm-10)
+
+./llvm-10-toolchain/bin/opt -passes="default<Oz>" ../npb-v0_83.ll -S -o output_oz.ll
+
+./llvm-10-toolchain/bin/opt -mem2reg -simplifycfg -instcombine -gvn -loop-reroll -gvn -simplifycfg -early-cse -jump-threading -lower-constant-intrinsics -lower-constant-intrinsics -sccp -elim-avail-extern -early-cse -lower-expect -loop-simplifycfg -lower-constant-intrinsics -inline -simplifycfg -loop-simplifycfg -early-cse-memssa -early-cse npb-v0_83.ll -S -o output_custom.ll
+
+
+
+
+
+
+
+# example 2 testing code
+
+./llvm-10-toolchain/bin/opt -Oz npb-v0_102.ll -S -o output_oz.ll
+
+./llvm-10-toolchain/bin/opt -mergefunc -early-cse -instsimplify -aggressive-instcombine -loop-instsimplify -bdce -instcombine -simplifycfg -loop-simplifycfg -mem2reg -globaldce -elim-avail-extern -mem2reg -elim-avail-extern -lower-expect -slp-vectorizer -gvn -gvn-hoist -loop-reduce -gvn-hoist -loop-reroll -loop-simplifycfg -loop-instsimplify -aggressive-instcombine -reassociate -elim-avail-extern -loop-instsimplify -simplifycfg -gvn-hoist -gvn-hoist -loop-simplifycfg -loop-instsimplify -loop-simplifycfg -loop-reroll -early-cse-memssa -simplifycfg -sroa -globalopt -dse npb-v0_102.ll -S -o output_custom.ll
+
+# 1. Compare the total lines of LLVM IR code (smaller is generally cleaner/tighter)
+
+wc -l npb-v0_83.ll output_oz.ll output_custom.ll

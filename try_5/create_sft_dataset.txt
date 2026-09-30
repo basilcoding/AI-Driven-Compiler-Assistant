@@ -1,0 +1,398 @@
+import os
+import ast
+import json
+import pandas as pd
+from tqdm import tqdm
+import anthropic
+import compiler_gym
+from dotenv import load_dotenv
+import re
+
+# ==========================================
+# 1. CORE SETUP & CONFIGURATION
+# ==========================================
+# Load environment variables from the .env file
+load_dotenv()
+
+CSV_INPUT_FILE = "Experiment_1_2.csv"
+OUTPUT_JSONL_FILE = "dataset_1to1000_linux-v0.jsonl"
+
+# Initialize Anthropic Client
+# The SDK automatically looks for ANTHROPIC_API_KEY in your environment variables
+anthropic_client = anthropic.Anthropic()
+
+# Use the latest Claude Sonnet 5 model
+MODEL_ID = "claude-sonnet-5"
+
+# ==========================================
+# PASS-MENTION VALIDATION HELPER
+# ==========================================
+MIN_PASS_MENTION_RATIO = 0.8  # at least 80% of distinct target passes must be named in the trace
+
+def passes_mentioned_ratio(text, pass_list):
+    """Fraction of *distinct* target pass names that appear as whole tokens in text."""
+    unique_passes = set(pass_list)
+    if not unique_passes:
+        return 1.0
+    mentioned = sum(
+        1 for p in unique_passes
+        # MODIFIED: Using whitespace boundaries instead of \b because '-' is a non-word character.
+        # \b--dce\b would fail to match " --dce ".
+        if re.search(r'(?<!\S)' + re.escape(p) + r'(?!\S)', text)
+    )
+    return mentioned / len(unique_passes)
+
+# ==========================================
+# 2. SPELLBOOK & COMPILER DICTIONARY
+# ==========================================
+PASS_DESCRIPTIONS = {
+    "--add-discriminators": "Add discriminators for better debug info.",
+    "--adce": "Aggressively eliminate dead code.",
+    "--aggressive-instcombine": "Aggressive instruction combining.",
+    "--alignment-from-assumptions": "Optimize memory alignment based on assumptions.",
+    "--always-inline": "Inline all always_inline functions.",
+    "--argpromotion": "Promote arguments from byref to byval.",
+    "--attributor": "Propagate attributes across modules.",
+    "--barrier": "Place barriers before code generation.",
+    "--bdce": "Bit-level dead code elimination.",
+    "--break-crit-edges": "Break critical edges to simplify CFG.",
+    "--simplifycfg": "Simplify the control flow graph.",
+    "--callsite-splitting": "Split indirect call sites based on constants.",
+    "--called-value-propagation": "Propagate called values at indirect call sites.",
+    "--canonicalize-aliases": "Canonicalize aliases for better analysis.",
+    "--consthoist": "Hoist constants to higher scopes.",
+    "--constmerge": "Merge duplicate constants.",
+    "--constprop": "Simple constant propagation.",
+    "--coro-cleanup": "Remove coroutine scheduling remnants.",
+    "--coro-early": "Early coroutine transformation.",
+    "--coro-elide": "Remove unnecessary coroutine constructs.",
+    "--coro-split": "Split coroutines into multiple functions.",
+    "--correlated-propagation": "Propagate correlated value info.",
+    "--cross-dso-cfi": "Cross-DSO control flow integrity.",
+    "--deadargelim": "Remove unused function arguments.",
+    "--dce": "Dead code elimination.",
+    "--die": "Dead instruction elimination.",
+    "--dse": "Dead store elimination.",
+    "--reg2mem": "Convert registers to stack memory references.",
+    "--div-rem-pairs": "Optimize division and remainder pairs.",
+    "--early-cse-memssa": "Early CSE based on memory SSA.",
+    "--early-cse": "Early common subexpression elimination.",
+    "--elim-avail-extern": "Convert available external globals to definitions.",
+    "--ee-instrument": "Instrument exception handling for stack space.",
+    "--flattencfg": "Flatten the control flow graph.",
+    "--float2int": "Optimize floating-point to integer computations.",
+    "--forceattrs": "Force setting function attributes.",
+    "--inline": "Inline function code at call sites.",
+    "--insert-gcov-profiling": "Insert GCOV-compatible instrumentation.",
+    "--gvn-hoist": "Hoist redundant expressions.",
+    "--gvn": "Global value numbering.",
+    "--globaldce": "Global dead code elimination.",
+    "--globalopt": "Global variable optimization.",
+    "--globalsplit": "Split global variables into fragments.",
+    "--guard-widening": "Widen guard conditions.",
+    "--hotcoldsplit": "Split hot and cold paths.",
+    "--ipconstprop": "Interprocedural constant propagation.",
+    "--ipsccp": "Interprocedural sparse conditional constant propagation.",
+    "--indvars": "Canonicalize loop induction variables.",
+    "--irce": "Inductive range check elimination.",
+    "--infer-address-spaces": "Infer address spaces.",
+    "--inferattrs": "Infer attributes for unknown functions.",
+    "--inject-tli-mappings": "Inject target library info mappings.",
+    "--instsimplify": "Remove redundant instructions.",
+    "--instcombine": "Combine instructions into simpler forms.",
+    "--instnamer": "Assign names to unnamed instructions.",
+    "--jump-threading": "Thread conditional jumps.",
+    "--lcssa": "Convert loops to loop-closed SSA form.",
+    "--licm": "Move loop-invariant code out of loops.",
+    "--libcalls-shrinkwrap": "Optimize library call wrappers.",
+    "--load-store-vectorizer": "Vectorize adjacent loads and stores.",
+    "--loop-data-prefetch": "Prefetch data in loops.",
+    "--loop-deletion": "Delete useless loops.",
+    "--loop-distribute": "Distribute loops for parallelism.",
+    "--loop-fusion": "Fuse loops to reduce overhead.",
+    "--loop-guard-widening": "Widen loop guard conditions.",
+    "--loop-idiom": "Recognize and replace common idioms in loops.",
+    "--loop-instsimplify": "Simplify instructions in loops.",
+    "--loop-interchange": "Interchange nested loops.",
+    "--loop-load-elim": "Eliminate redundant loads in loops.",
+    "--loop-predication": "Convert branches in loops to selects.",
+    "--loop-reroll": "Reroll unrolled loops.",
+    "--loop-rotate": "Rotate loops for better execution.",
+    "--loop-simplifycfg": "Simplify loop control flow graph.",
+    "--loop-simplify": "Canonicalize loop form.",
+    "--loop-sink": "Sink instructions in loops.",
+    "--loop-reduce": "Loop strength reduction.",
+    "--loop-unroll-and-jam": "Unroll and jam nested loops.",
+    "--loop-unroll": "Unroll loops.",
+    "--loop-unswitch": "Extract conditions from loops.",
+    "--loop-vectorize": "Vectorize loops.",
+    "--loop-versioning-licm": "Create loop versions for LICM.",
+    "--loop-versioning": "Create multiple loop versions.",
+    "--loweratomic": "Lower atomic instructions.",
+    "--lower-constant-intrinsics": "Lower constant intrinsics.",
+    "--lower-expect": "Lower llvm.expect intrinsics.",
+    "--lower-guard-intrinsic": "Lower guard intrinsics.",
+    "--lowerinvoke": "Lower invoke and unwind instructions.",
+    "--lower-matrix-intrinsics": "Lower matrix operation intrinsics.",
+    "--lowerswitch": "Lower switch instructions.",
+    "--lower-widenable-condition": "Lower widenable conditions.",
+    "--memcpyopt": "Optimize memory copy operations.",
+    "--mergefunc": "Merge duplicate functions.",
+    "--mergeicmps": "Merge consecutive compare instructions.",
+    "--mldst-motion": "Move memory load/store operations.",
+    "--sancov": "Instrument sanitizer coverage.",
+    "--name-anon-globals": "Name anonymous global variables.",
+    "--nary-reassociate": "Reassociate n-ary expressions.",
+    "--newgvn": "New global value numbering.",
+    "--pgo-memop-opt": "Profile-guided memory operation optimization.",
+    "--partial-inliner": "Partially inline hot paths.",
+    "--partially-inline-libcalls": "Partially inline library calls.",
+    "--post-inline-ee-instrument": "Instrument exception handling after inlining.",
+    "--functionattrs": "Infer function attributes.",
+    "--mem2reg": "Convert memory references to registers.",
+    "--prune-eh": "Remove unreachable exception handling code.",
+    "--reassociate": "Reassociate expressions.",
+    "--redundant-dbg-inst-elim": "Remove redundant debug instructions.",
+    "--rpo-functionattrs": "Infer function attributes in reverse postorder.",
+    "--rewrite-statepoints-for-gc": "Rewrite statepoints for garbage collection.",
+    "--sccp": "Sparse conditional constant propagation.",
+    "--slp-vectorizer": "Superword-level parallelism vectorization.",
+    "--sroa": "Scalar replacement of aggregates.",
+    "--scalarizer": "Convert vector operations to scalar operations.",
+    "--separate-const-offset-from-gep": "Separate constant offsets from GEP instructions.",
+    "--simple-loop-unswitch": "Simplified loop unswitching.",
+    "--sink": "Sink instructions to their use points.",
+    "--speculative-execution": "Speculatively execute instructions.",
+    "--slsr": "Straight-line strength reduction.",
+    "--strip-dead-prototypes": "Remove unused function prototypes.",
+    "--strip-debug-declare": "Remove debug declarations.",
+    "--strip-nondebug": "Remove all non-debug information.",
+    "--strip": "Remove all symbol information.",
+    "--tailcallelim": "Eliminate tail calls.",
+    "--mergereturn": "Merge multiple return points into one.",
+    "-Oz": "Optimize aggressively for size."
+}
+
+def format_spellbook_by_category() -> str:
+    buckets = {}
+    for p, desc in PASS_DESCRIPTIONS.items():
+        clean_name = p # MODIFIED: Removed .lstrip('-') to retain the full prefix
+        # Strip the trailing period from the description
+        clean_desc = desc.rstrip('.')
+        buckets.setdefault(clean_desc, []).append(clean_name)
+        
+    return "\n".join(
+        f"  - {desc}: {', '.join(sorted(names))}"
+        for desc, names in sorted(buckets.items())
+    )
+
+GRAND_SPELLBOOK_BLOCK = format_spellbook_by_category()
+
+# ==========================================
+# 3. INITIALIZE COMPILER GYM ENVIRONMENT
+# ==========================================
+print("Initializing CompilerGym LLVM Environment...")
+env = compiler_gym.make('llvm-v0')
+
+# Target Dataset Download Link Configuration
+TARGET_DATASET_URI = "benchmark://linux-v0"
+print(f"Ensuring dataset {TARGET_DATASET_URI} is downloaded locally...")
+
+# ==========================================
+# 4. PROCESSING & DISTILLATION LOOP
+# ==========================================
+df = pd.read_csv(CSV_INPUT_FILE)
+
+# Filter out negative or zero performance scores
+df = df[df['OverOz'] > 0.0]
+
+# Filter to keep ONLY rows where the filename contains 'linux-v0'
+df = df[df['Filename'].str.contains('linux-v0', na=False)]
+
+df = df.head(1000)
+
+print(f"Loaded {len(df)} successful optimization rows from {CSV_INPUT_FILE}.")
+
+# Ask the user for the skip count in the terminal before running
+try:
+    processed_count = int(input(f"Enter the number of already processed rows to skip (enter 0 to start from the beginning): "))
+except ValueError:
+    print("Invalid input. Defaulting to 0.")
+    processed_count = 0
+
+print(f"Skipping the first {processed_count} rows. Resuming from there...")
+
+# Open in APPEND mode ('a') so we don't overwrite previous work
+with open(OUTPUT_JSONL_FILE, "a", encoding="utf-8") as out_file:
+    
+    # Enumerate the iterrows to track exactly which index we're on
+    for loop_index, (idx, row) in tqdm(enumerate(df.iterrows()), total=len(df), desc="Synthesizing SFT Traces"):
+        
+        # Skip previously processed rows based on your input
+        if loop_index < processed_count:
+            continue
+            
+        raw_filename = row['Filename']
+        
+        # os.path.basename correctly extracts 'linux-v0_37025'
+        base_name = os.path.basename(raw_filename).replace('.ll', '')
+        prefix = "linux-v0_"
+        
+        if not base_name.startswith(prefix):
+            print(f"\n[Warning] Skipping unexpected filename format: {raw_filename}")
+            continue
+            
+        # Extract everything after the prefix (e.g., '37025')
+        benchmark_id = base_name[len(prefix):]
+        gym_uri = f"{TARGET_DATASET_URI}/{benchmark_id}"
+        
+        # 1. Safely pull data from CompilerGym
+        try:
+            env.reset(benchmark=gym_uri)
+            autophase_dict = env.observation['AutophaseDict']
+        except Exception as e:
+            print(f"\n[Warning] Skipping benchmark {gym_uri}: {e}")
+            continue
+            
+        # 2. Normalize pass list from CSV format and convert to JSON string
+        try:
+            raw_passes = ast.literal_eval(row['PassSequence'])
+            # MODIFIED: Removed .lstrip('-') to retain the '--' in the final target array
+            clean_passes = [p for p in raw_passes if p != "-Oz"]
+            optimal_passes_json_str = json.dumps(clean_passes)
+        except Exception as e:
+            print(f"\n[Warning] Failed parsing pass sequence array for row {idx}: {e}")
+            continue
+            
+        feat_str = ", ".join(f"'{k}': {v}" for k, v in autophase_dict.items())
+        
+        # 3. Build synthesis prompt for the Oracle model
+        oracle_prompt = (
+            f"You are generating synthetic Chain-of-Thought (CoT) training data for an RL LLVM Agent.\n\n"
+            f"Benchmark state:\n"
+            f"AutoPhase metrics: {feat_str}\n\n"
+            f"The ultimate sequence of passes the agent must organically deduce is: {optimal_passes_json_str}\n\n"
+            f"Write the internal thinking process of the agent as it works out this exact sequence reason to reduce code better than -Oz "
+            f"the way a frontier reasoning model actually works through a hard problem, not the way a textbook explains one it already solved. Remember the imaginary agent only gets to see the autophase features once. "
+            f"Concretely:\n"
+            f"- Start from the raw AutoPhase numbers and form a hypothesis about what kind of code this is "
+            f"(loop-heavy, branch-heavy, lots of small functions, etc.) before naming any pass.\n"
+            f"- Weigh candidate passes against each other using the specific numbers, not vague heuristics — "
+            f"explain why a metric argues for one pass and against a plausible alternative.\n"
+            f"- Justify ordering and any repetition (why does a pass need to run again once an earlier pass "
+            f"changes the numbers it depends on?).\n"
+            f"- Build the sequence forward, in the same order it appears in the final answer — don't state the "
+            f"answer first and justify it backwards.\n"
+            f"Depth matters here: a two-sentence justification per pass is a failure. This should read like "
+            f"extended, uncertain, self-correcting reasoning, not a tidy summary.\n\n"
+            f"CRITICAL RULES:\n"
+            f"1. NO META-AWARENESS: Never mention that you were given the optimal sequence. Roleplay perfectly as if you are deducing this from scratch.\n"
+            f"2. GROUNDED REASONING: Connect the target passes directly to the numbers in the AutoPhase dict.\n"
+            f"3. PHASED EXECUTION: Logically justify why passes are repeated.\n"
+            f"4. STRICT OUTPUT STRUCTURE: You MUST output exactly two XML tags. DO NOT use markdown code blocks (```) anywhere. The answer block MUST contain a valid JSON array of strings.\n\n"
+            f"5. PLAIN TEXT ONLY: Use plain ASCII punctuation throughout — straight quotes (' and \"), "
+            f"regular hyphens (-), no em/en dashes, no smart quotes, no bullet characters or other "
+            f"typographic symbols.\n"
+            f"Format your entire response EXACTLY like this (no other text before or after):\n"
+            f"<think>\n"
+            f"[Your detailed reasoning process here]\n"
+            f"</think>\n"
+            f"<answer>\n"
+            f"{optimal_passes_json_str}\n"
+            f"</answer>"
+        )
+
+        # 4. Extract thinking traces using Anthropic API (with retries)
+        MAX_RETRIES = 5
+        MIN_THOUGHT_LENGTH = 500  # chars; a real CoT trace should be much longer than this
+
+        thought_process = ""
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = anthropic_client.messages.create(
+                    model=MODEL_ID,
+                    max_tokens=6000,
+                    temperature=0.6,
+                    system="You are an expert compiler optimization engineer specializing in LLVM optimization configurations.",
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": oracle_prompt
+                        }
+                    ]
+                )
+
+                # Extract the generated reasoning trace from Claude's standard text output
+                candidate = ""
+                for block in response.content:
+                    if getattr(block, "type", "") == "text":
+                        raw_text = block.text
+                        # Strip out the <answer> block and any <think> wrappers it generated
+                        candidate = raw_text.split('<answer>')[0].replace('<think>', '').replace('</think>', '').strip()
+
+                # ---- Cleanup ----
+                candidate = re.sub(r'<tool_call>.*?</tool_call>', '', candidate, flags=re.DOTALL)
+                candidate = re.sub(r'</?arg_value>', '', candidate)
+                
+                # Strip out any rogue <thinking> or </thinking> tags natively output by the model
+                candidate = re.sub(r'</?thinking>\n?', '', candidate)
+                
+                candidate = candidate.split('<answer>')[0].strip()
+                candidate = candidate.replace('<tool_call>', '').replace('</tool_call>', '').strip()
+
+                # ---- Validation: is this an actual reasoning trace? ----
+                mention_ratio = passes_mentioned_ratio(candidate, clean_passes)
+
+                if len(candidate) >= MIN_THOUGHT_LENGTH and mention_ratio >= MIN_PASS_MENTION_RATIO:
+                    thought_process = candidate
+                    break  # success
+                else:
+                    print(f"\n[Retry {attempt}/{MAX_RETRIES}] Trace rejected for index {idx} "
+                          f"(len={len(candidate)} chars, pass_mention_ratio={mention_ratio:.0%}). Retrying...")
+
+            except Exception as e:
+                print(f"\n[Retry {attempt}/{MAX_RETRIES}] Anthropic API failure at index {idx}: {e}")
+
+        if not thought_process:
+            print(f"\n[Warning] Gave up on index {idx} after {MAX_RETRIES} attempts (no valid reasoning trace).")
+            continue  # skip this row entirely
+            
+        # 5. Assemble final SFT message wrapper structure
+        sft_entry = {
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an LLVM Compiler RL Agent. Your objective is to discover a custom sequence of optimization passes that will shrink the instruction count of the given IR even further than the standard '-Oz' optimization level.\n\n"
+                        "The only passes you can use along with their descriptions are:\n"
+                        f"{GRAND_SPELLBOOK_BLOCK}\n\n"
+                        "Rules:\n"
+                        "- Pick however many passes are actually useful — no bonus for more, no penalty "
+                        "for fewer.\n"
+                        "- End with your chosen passes as a JSON array of strings inside <answer>...</answer>, nothing else inside "
+                        "the tags.\n"
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"\nAutoPhase: {{ {feat_str} }}\n\n"
+                        "Remember: conclude your response with exactly one <answer>...</answer> "
+                        "block containing a JSON array of pass names as strings."
+                    )
+                },
+                {
+                    "role": "assistant",
+                    # We inject the isolated thought process and append the exact correct answer block
+                    "content": f"<think>\n{thought_process}\n</think>\n<answer>{optimal_passes_json_str}</answer>"
+                }
+            ]
+        }
+        
+        # Write directly to JSONL format file
+        out_file.write(json.dumps(sft_entry, ensure_ascii=False) + "\n")
+        # Force write to disk immediately so you can safely stop the script mid-run
+        out_file.flush()
+
+env.close()
+print(f"\nProcessing successfully completed. Dataset compiled into {OUTPUT_JSONL_FILE}")s

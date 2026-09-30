@@ -1,0 +1,53 @@
+!pip install -q -U huggingface_hub
+!huggingface-cli login
+
+from unsloth import FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "outputs_sft/checkpoint-500",   # your saved SFT LoRA dir
+    max_seq_length = 10000,                 # match what you trained with
+    load_in_4bit = True,                   # base repo only exists in 4-bit
+)
+
+# Save to 16-bit precision
+model.save_pretrained_merged("model", tokenizer, save_method="merged_16bit")
+# Push to Hugging Face Hub (requires a token)
+model.push_to_hub_merged(
+    "bcoding/deepseek-llvm-sft-merged-8b", tokenizer, save_method="merged_16bit", token=True
+)
+
+
+# model.push_to_hub("bcoding/deepseek-llvm-sft-lora-8B-step_500", token = True)
+# tokenizer.push_to_hub("bcoding/deepseek-llvm-sft-lora-8B-step_500", token = True)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+from unsloth import FastLanguageModel
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name = "outputs_sft/checkpoint-500",   # your saved SFT LoRA dir
+    max_seq_length = 10000,                 # match what you trained with
+    load_in_4bit = True,                   # base repo only exists in 4-bit
+)
+
+# Save to 16-bit precision
+model.save_pretrained_merged("sft_step500_merged_16bit", tokenizer, save_method="merged_16bit")
+# model.save_pretrained_merged("model", tokenizer, save_method="merged_4bit")
+# Push to Hugging Face Hub (requires a token)
+model.push_to_hub_merged(
+    "bcoding/deepseek-llvm-sft-merged-8b", tokenizer, save_method="merged_16bit", token=True
+)

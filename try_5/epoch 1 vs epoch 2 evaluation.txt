@@ -1,0 +1,21 @@
+# ======================================================================
+#                   FINAL EVALUATION SUMMARY
+# ======================================================================
+# Total Benchmarks Processed:  250
+
+# [ ROBUSTNESS & FORMATTING ]
+#   (Failures indicate broken JSON, hallucinated passes, or opt crashes)
+#   SFT BASE MODEL EPOCH 2 Valid Compilations: 249 / 250  (1 failures)
+#   SFT BASE MODEL EPOCH 1 Valid Compilations: 245 / 250  (5 failures)
+
+# [ PERFORMANCE vs STANDARD -Oz ]
+#   SFT BASE MODEL EPOCH 2 Beat -Oz:           56 / 250 files
+#   SFT BASE MODEL EPOCH 1 Beat -Oz:           29 / 250 files
+
+# [ HEAD-TO-HEAD COMPRESSION (SFT BASE MODEL EPOCH 2 vs SFT BASE MODEL EPOCH 1) ]
+#   SFT BASE MODEL EPOCH 2 strictly better on: 129 files
+#   SFT BASE MODEL EPOCH 1 strictly better on: 71 files
+#   Tie (same instruction count):       50 files
+
+#  CONCLUSION: SFT BASE MODEL EPOCH 2 is the winner!
+# ======================================================================
